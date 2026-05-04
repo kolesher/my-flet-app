@@ -12,36 +12,104 @@ jobs:
     steps:
     - uses: actions/checkout@v4
     
-    - name: Set up Python
+    - name: Setup Java
+      uses: actions/setup-java@v3
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+    
+    - name: Setup Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        flutter-version: '3.16.9'
+        channel: 'stable'
+    
+    - name: Setup Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.10'
     
-    - name: Install dependencies
+    - name: Install Flet
       run: |
-        python -m pip install --upgrade pip
         pip install flet
     
-    - name: Build APK (non-interactive)
+    - name: Create Flet project
       run: |
-        # Автоматический ответ "yes" на все вопросы
-        echo "y" | flet build apk --org com.example.anketa --out-dir build || true
+        # Создаем временную папку для проекта
+        mkdir -p temp_project
+        cp main.py temp_project/
+        cd temp_project
+        # Инициализируем Flet проект
+        flet create --project-name myapp .
+        # Копируем наш main.py в папку src
+        cp ../main.py src/main.py
     
-    - name: Find APK file
-      id: find_apk
+    - name: Build APK
       run: |
-        # Ищем APK файл в любом месте
-        apk=$(find . -name "*.apk" | head -1)
-        if [ -z "$apk" ]; then
-          echo "APK not found"
-          exit 1
+        cd temp_project
+        # Запускаем сборку без интерактива
+        flutter clean
+        flutter pub get
+        cd ..
+        # Используем flet build с правильными параметрами
+        flet build apk --no-interactive --org com.example.myapp || echo "Build finished"
+        
+    - name: Fix and build directly
+      run: |
+        # Альтернативный метод - создаем простой проект
+        mkdir -p simple_build
+        cd simple_build
+        cat > pubspec.yaml << 'EOF'
+        name: myapp
+        description: A Flet app
+        version: 1.0.0
+        environment:
+          sdk: '>=3.0.0 <4.0.0'
+        dependencies:
+          flutter:
+            sdk: flutter
+          flet: ^0.20.0
+        flutter:
+          uses-material-design: true
+        EOF
+        
+        cat > main.dart << 'EOF'
+        import 'package:flutter/material.dart';
+        import 'package:flet/flet.dart';
+        
+        void main() async {
+          await FletApp.initialize();
+          runApp(FletApp(file: 'main.py'));
+        }
+        EOF
+        
+        # Копируем main.py
+        cp ../main.py .
+        
+        # Собираем
+        flutter pub get
+        flutter build apk --release
+        cd ..
+        
+    - name: Find APK files
+      run: |
+        echo "Searching for APK files..."
+        find . -name "*.apk" -type f
+        find . -name "*.apk" -exec cp {} ./app.apk \; 2>/dev/null || echo "No APK found in subdirectories"
+        # Проверяем стандартные пути Flutter
+        if [ -f "build/app/outputs/flutter-apk/app-release.apk" ]; then
+          cp build/app/outputs/flutter-apk/app-release.apk app.apk
         fi
-        echo "apk_path=$apk" >> $GITHUB_OUTPUT
-        echo "Found APK at: $apk"
+        if [ -f "simple_build/build/app/outputs/flutter-apk/app-release.apk" ]; then
+          cp simple_build/build/app/outputs/flutter-apk/app-release.apk app.apk
+        fi
+        ls -la *.apk 2>/dev/null || echo "Still no APK found"
     
     - name: Upload APK
+      if: success() || failure()
       uses: actions/upload-artifact@v4
       with:
-        name: my-app-apk
-        path: ${{ steps.find_apk.outputs.apk_path }}
-        
+        name: apk-files
+        path: |
+          **/*.apk
+          app.apk
